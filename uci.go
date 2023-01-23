@@ -8,8 +8,8 @@ import (
 	"github.com/freeeve/uci"
 )
 
-func doUci(w http.ResponseWriter) {
-	eng, err := uci.NewEngine("/opt/homebrew/bin/stockfish")
+func engine(port string, isWhite bool, nextMove chan string, results chan string) {
+	eng, err := uci.NewEngine("/usr/bin/nc", "localhost", port)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -22,13 +22,49 @@ func doUci(w http.ResponseWriter) {
 		MultiPV: 4,
 	})
 
-	// set the starting position
-	eng.SetFEN("rnb4r/ppp1k1pp/3bp3/1N3p2/1P2n3/P3BN2/2P1PPPP/R3KB1R b KQ - 4 11")
+	moves := ""
+	if !isWhite {
+		moves = <-nextMove
+	}
 
-	// set some result filter options
-	resultOpts := uci.HighestDepthOnly | uci.IncludeUpperbounds | uci.IncludeLowerbounds
-	results, _ := eng.Go(0, "", 100, resultOpts)
+	for {
+		// set the starting position
+		fmt.Printf("moves %s\n", moves)
+		eng.SetMoves(moves)
 
-	// print it (String() goes to pretty JSON for now)
-	fmt.Fprintln(w, results.String())
+		// set some result filter options
+		resultOpts := uci.HighestDepthOnly | uci.IncludeUpperbounds | uci.IncludeLowerbounds
+		result, _ := eng.Go(0, "", 100, resultOpts)
+		myMove := result.BestMove
+		results <- myMove
+		opponent := <-nextMove
+		moves = fmt.Sprintf("%s %s %s", moves, myMove, opponent)
+	}
+}
+
+func doUci(w http.ResponseWriter) {
+	nextMove1 := make(chan string)
+	results1 := make(chan string)
+	nextMove2 := make(chan string)
+	results2 := make(chan string)
+
+	go engine("5556", true, nextMove1, results1)
+	go engine("5557", false, nextMove2, results2)
+
+	for {
+		white := <-results1
+		if white == "(none)" {
+			return
+		}
+		w.Write([]byte(white + " "))
+		fmt.Println(white)
+		nextMove2 <- white
+		black := <-results2
+		if black == "(none)" {
+			return
+		}
+		w.Write([]byte(black + " "))
+		fmt.Println(black)
+		nextMove1 <- black
+	}
 }
